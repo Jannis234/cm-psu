@@ -64,8 +64,7 @@
 #define COUNT_TEMP    2
 #define COUNT_FAN     1
 
-#define EVENT_LEN_MIN 5  /* Minimum that can include data */
-#define EVENT_LEN_MAX 64 /* Prevent long parsing on obviously invalid data */
+#define EVENT_LEN 16
 
 struct cmpsu_data {
 	struct hid_device *hdev;
@@ -375,10 +374,10 @@ static int cmpsu_raw_event(struct hid_device *hdev, struct hid_report *report, u
 	int idx;
 	long value, value2;
 	
-	/* Events appear to always be 16 bytes, we support any length just in case */
-	if (size < EVENT_LEN_MIN || size > EVENT_LEN_MAX) {
+	if (size != EVENT_LEN) {
 		return 0;
 	}
+	
 	/* Make sure the string is terminated correctly */
 	if (data[size - 1] != 0 && data[size - 1] != '/') {
 		return 0;
