@@ -1,3 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * cm-psu.c - Linux driver for Cooler Master power supplies with HID interface
+ * Copyright (C) 2023 Jannis Mast <jannis@ctrl-c.xyz>
+ * 
+ * Based on corsair-psu.c
+ * Copyright (C) 2020 Wilken Gottwalt <wilken.gottwalt@posteo.net>
+ */
+
 #include <linux/errno.h>
 #include <linux/hid.h>
 #include <linux/hwmon.h>
@@ -6,13 +15,54 @@
 #include <linux/module.h>
 #include <linux/types.h>
 
+/*
+ * Protocol information:
+ * - The PSU sends HID events without having to send a request first
+ * - Events contain human-readable strings
+ * - All events appear to be 16 bytes long, padded with zero bytes if needed
+ * - The format of each string is:
+ *   [{type}{channel}{value}]
+ * - Types are a single uppercase letter, channels a single digit
+ * - Valid types are:
+ *   - V: Voltage (Volt)
+ *   - I: Current (Amp)
+ *   - P: Power (Watt)
+ *   - T: Temperature (°C)
+ *   - R: Fan speed (RPM)
+ * - Channels start at 1
+ * - Values can have different numbers of digits and can include a decimal
+ *   point
+ * - Special case: Channel P2 includes two values in this format:
+ *   [P2{value1}/{value2}]
+ *   (No other channels appear to do this)
+ * 
+ * The protocol has been reverse engineered (if you can even call it that) by
+ * looking at the data and referecing with what is displayed by Cooler Master's
+ * MasterPlus software.
+ * The driver has been tested against a V850 Gold i multi PSU. Looking at
+ * hardware description files (JSON) included with MasterPlus, all compatible
+ * models should use an identical protocol.
+ * 
+ * Quirks/missing features:
+ * - The temperature readings don't have labels because there is no indication
+ *   what they acutally are. CM's software only show one temperature.
+ * - Channel P1 is currently ignored because it is unclear what value it is
+ *   reporting. Looking at the previously mentioned JSON files from MasterPlus,
+ *   it is either PFC (Power factor correction?) or EFF (efficiency?). CM's
+ *   software doesn't show this value either.
+ * - Fan control is not supported. Right now, this driver is entirely passive
+ *   and does not send any requests to the PSU. Figuring out the protocol for
+ *   setting custom fan curves will likely require sniffing USB traffic from
+ *   CM's software (which refuses to run on my machine for some reason).
+ */
+
 #define DRIVER_NAME "cm-psu"
 
 #define COUNT_VOLTAGE 5
 #define COUNT_CURRENT 5
-#define COUNT_POWER 2
-#define COUNT_TEMP 2
-#define COUNT_FAN 1
+#define COUNT_POWER   2
+#define COUNT_TEMP    2
+#define COUNT_FAN     1
 
 #define EVENT_LEN_MIN 5  /* Minimum that can include data */
 #define EVENT_LEN_MAX 64 /* Prevent long parsing on obviously invalid data */
@@ -32,7 +82,7 @@ static const char* cmpsu_labels_voltage[] = {
 	"+5V",
 	"+3.3V",
 	"+12V2",
-	"+12V1", /* Reverse order because this one is present on single-rail models */
+	"+12V1", /* Reverse order because this oneis present on single-rail PSUs */
 };
 
 static const char* cmpsu_labels_current[] = {
@@ -292,7 +342,8 @@ long cmpsu_parse_value(u8 *data, int *idx, int fraction_scale, bool expect_secon
 		}
 		
 		while (data[*idx] >= '0' && data[*idx] <= '9') {
-			/* Even if we are expecting an integer, we still run this loop to move idx past this number. Also skip digits if there are more than 3 since those wouldn't fit */
+			/* Even if we are expecting an integer, we still run this loop to
+			 * move idx past this number. */
 			if (fraction_scale_current < fraction_scale) {
 				ret *= 10;
 				ret += data[*idx] - '0';
@@ -340,7 +391,7 @@ static int cmpsu_raw_event(struct hid_device *hdev, struct hid_report *report, u
 	if (data[2] < '1' || data[2] > '9') {
 		return 0;
 	}
-	channel = data[2] - '1'; /* Channel index starts at 1 */
+	channel = data[2] - '1';
 	idx = 3;
 	switch (type) {
 		case 'V':
@@ -362,7 +413,7 @@ static int cmpsu_raw_event(struct hid_device *hdev, struct hid_report *report, u
 			}
 			break;
 		case 'P':
-			/* Special case: Channel 1 contains two values, channel 0 is ignored */
+			/* Special case for channel P2 */
 			if (channel != 1) {
 				return 0;
 			}
