@@ -8,12 +8,38 @@
 
 #define DRIVER_NAME "cm-psu"
 
+#define COUNT_IN_CURR 5
+#define COUNT_POWER 2
+#define COUNT_TEMP 2
+#define COUNT_FAN 1
+
 struct cmpsu_data {
 	struct hid_device *hdev;
 	struct device *hwmon_dev;
 };
 
-static const char *placeholder = "placeholder";
+static const char* cmpsu_labels_voltage[] = {
+	"V_AC",
+	"+12V1",
+	"+12V2",
+	"+5V",
+	"+3.3V",
+};
+static const char *cmpsu_labels_12v_single = "+12V";
+
+static const char* cmpsu_labels_current[] = {
+	"I_AC",
+	"I_+12V1",
+	"I_+12V2",
+	"I_+5V",
+	"I_+3.3V",
+};
+static const char *cmpsu_labels_i12v_single = "I_+12V";
+
+static const char* cmpsu_labels_power[] = {
+	"P_in",
+	"P_out",
+};
 
 static umode_t cmpsu_hwmon_is_visible(const void *data, enum hwmon_sensor_types type, u32 attr, int channel) {
 	
@@ -30,8 +56,18 @@ static int cmpsu_hwmon_read(struct device *dev, enum hwmon_sensor_types type, u3
 
 static int cmpsu_hwmon_read_string(struct device *dev, enum hwmon_sensor_types type, u32 attr, int channel, const char **str) {
 	
-	*str = placeholder;
-	return 0;
+	if (type == hwmon_in && attr == hwmon_in_label && channel < COUNT_IN_CURR) {
+		*str = cmpsu_labels_voltage[channel]; // TODO: Handle single 12V rail
+		return 0;
+	} else if (type == hwmon_curr && attr == hwmon_curr_label && channel < COUNT_IN_CURR) {
+		*str = cmpsu_labels_current[channel]; // TODO: Handle single 12V rail
+		return 0;
+	} else if (type == hwmon_power && attr == hwmon_power_label && channel < COUNT_POWER) {
+		*str = cmpsu_labels_power[channel];
+		return 0;
+	}
+	
+	return -EOPNOTSUPP;
 	
 }
 
@@ -42,11 +78,26 @@ static const struct hwmon_ops cmpsu_hwmon_ops = {
 };
 
 static const struct hwmon_channel_info* cmpsu_info[] = {
-	//HWMON_CHANNEL_INFO(chip,
-	//				HWMON_C_REGISTER_TZ),
 	HWMON_CHANNEL_INFO(temp,
 					HWMON_T_INPUT,
 					HWMON_T_INPUT),
+	HWMON_CHANNEL_INFO(fan,
+					HWMON_F_INPUT),
+	HWMON_CHANNEL_INFO(in,
+					HWMON_I_INPUT | HWMON_I_LABEL,
+					HWMON_I_INPUT | HWMON_I_LABEL,
+					HWMON_I_INPUT | HWMON_I_LABEL,
+					HWMON_I_INPUT | HWMON_I_LABEL,
+					HWMON_I_INPUT | HWMON_I_LABEL),
+	HWMON_CHANNEL_INFO(curr,
+					HWMON_C_INPUT | HWMON_C_LABEL,
+					HWMON_C_INPUT | HWMON_C_LABEL,
+					HWMON_C_INPUT | HWMON_C_LABEL,
+					HWMON_C_INPUT | HWMON_C_LABEL,
+					HWMON_C_INPUT | HWMON_C_LABEL),
+	HWMON_CHANNEL_INFO(power,
+					HWMON_P_INPUT | HWMON_P_LABEL,
+					HWMON_P_INPUT | HWMON_P_LABEL),
 	NULL
 };
 
