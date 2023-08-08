@@ -14,6 +14,9 @@
 #define COUNT_TEMP 2
 #define COUNT_FAN 1
 
+#define EVENT_LEN_MIN 5  /* Minimum that can include data */
+#define EVENT_LEN_MAX 64 /* Prevent long parsing on obviously invalid data */
+
 struct cmpsu_data {
 	struct hid_device *hdev;
 	struct device *hwmon_dev;
@@ -26,18 +29,18 @@ struct cmpsu_data {
 
 static const char* cmpsu_labels_voltage[] = {
 	"V_AC",
-	"+12V1",
-	"+12V2",
 	"+5V",
 	"+3.3V",
+	"+12V2",
+	"+12V1", /* Reverse order because this one is present on single-rail models */
 };
 
 static const char* cmpsu_labels_current[] = {
 	"I_AC",
-	"I_+12V1",
-	"I_+12V2",
 	"I_+5V",
 	"I_+3.3V",
+	"I_+12V2",
+	"I_+12V1",
 };
 
 static const char* cmpsu_labels_power[] = {
@@ -264,9 +267,137 @@ static void cmpsu_remove(struct hid_device *hdev) {
 	
 }
 
+long cmpsu_parse_value(u8 *data, int *idx, int fraction_scale, bool expect_second) {
+	
+	long ret = 0;
+	int fraction_scale_current = 0;
+	
+	/* Make sure there is at least one digit */
+	if (data[*idx] < '0' || data[*idx] > '9') {
+		return -1;
+	}
+	
+	while (data[*idx] >= '0' && data[*idx] <= '9') {
+		ret *= 10;
+		ret += data[*idx] - '0';
+		(*idx)++;
+	}
+	
+	if (data[*idx] == '.') {
+		(*idx)++;
+		
+		/* Check for at least one digit after a decimal point */
+		if (data[*idx] < '0' || data[*idx] > '9') {
+			return -1;
+		}
+		
+		while (data[*idx] >= '0' && data[*idx] <= '9') {
+			/* Even if we are expecting an integer, we still run this loop to move idx past this number. Also skip digits if there are more than 3 since those wouldn't fit */
+			if (fraction_scale_current < fraction_scale) {
+				ret *= 10;
+				ret += data[*idx] - '0';
+				fraction_scale_current++;
+			}
+			(*idx)++;
+		}
+	}
+	
+	/* Add remaining zeros after the decimal point if needed */
+	while (fraction_scale_current < fraction_scale) {
+		ret *= 10;
+		fraction_scale_current++;
+	}
+	
+	/* Now check if the following character is valid */
+	if (data[*idx] == ']' || (data[*idx] == '/' && expect_second)) {
+		return ret;
+	}
+	return -1;
+	
+}
+
 static int cmpsu_raw_event(struct hid_device *hdev, struct hid_report *report, u8 *data, int size) {
 	
 	struct cmpsu_data *priv = hid_get_drvdata(hdev);
+	char type;
+	int channel;
+	int idx;
+	long value, value2;
+	
+	/* Events appear to always be 16 bytes, we support any length just in case */
+	if (size < EVENT_LEN_MIN || size > EVENT_LEN_MAX) {
+		return 0;
+	}
+	/* Make sure the string is terminated correctly */
+	if (data[size - 1] != 0 && data[size - 1] != '/') {
+		return 0;
+	}
+	if (data[0] != '[') {
+		return 0;
+	}
+	
+	type = data[1];
+	if (data[2] < '1' || data[2] > '9') {
+		return 0;
+	}
+	channel = data[2] - '1'; /* Channel index starts at 1 */
+	idx = 3;
+	switch (type) {
+		case 'V':
+			if (channel >= COUNT_VOLTAGE) {
+				return 0;
+			}
+			value = cmpsu_parse_value(data, &idx, 3, false);
+			if (value >= 0) {
+				priv->values_voltage[channel] = value;
+			}
+			break;
+		case 'I':
+			if (channel >= COUNT_CURRENT) {
+				return 0;
+			}
+			value = cmpsu_parse_value(data, &idx, 3, false);
+			if (value >= 0) {
+				priv->values_current[channel] = value;
+			}
+			break;
+		case 'P':
+			/* Special case: Channel 1 contains two values, channel 0 is ignored */
+			if (channel != 1) {
+				return 0;
+			}
+			value = cmpsu_parse_value(data, &idx, 6, true);
+			if (value == -1) {
+				return 0;
+			}
+			idx++; /* Skip past the '/' */
+			value2 = cmpsu_parse_value(data, &idx, 6, false);
+			if (value2 >= 0) {
+				priv->values_power[0] = value;
+				priv->values_power[1] = value2;
+			}
+			break;
+		case 'T':
+			if (channel >= COUNT_TEMP) {
+				return 0;
+			}
+			value = cmpsu_parse_value(data, &idx, 3, false);
+			if (value >= 0) {
+				priv->values_temp[channel] = value;
+			}
+			break;
+		case 'R':
+			if (channel >= COUNT_FAN) {
+				return 0;
+			}
+			value = cmpsu_parse_value(data, &idx, 0, false);
+			if (value >= 0) {
+				priv->values_fan[channel] = value;
+			}
+			break;
+		default:
+			return 0; /* Unknown type */
+	}
 	
 	return 0;
 	
