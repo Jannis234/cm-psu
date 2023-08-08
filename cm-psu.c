@@ -245,7 +245,7 @@ static int cmpsu_probe(struct hid_device *hdev, const struct hid_device_id *id) 
 		priv->values_fan[i] = -1;
 	}
 	
-	priv->hwmon_dev = hwmon_device_register_with_info(&hdev->dev, "corsairpsu", priv, &cmpsu_chip_info, NULL);
+	priv->hwmon_dev = hwmon_device_register_with_info(&hdev->dev, "cmpsu", priv, &cmpsu_chip_info, NULL);
 	if (IS_ERR(priv->hwmon_dev)) {
 		ret = PTR_ERR(priv->hwmon_dev);
 		hid_hw_close(hdev);
