@@ -38,7 +38,7 @@
  * 
  * The protocol has been reverse engineered (if you can even call it that) by
  * looking at the data and referecing with what is displayed by Cooler Master's
- * MasterPlus software.
+ * "MasterPlus" software.
  * The driver has been tested against a V850 Gold i multi PSU. Looking at
  * hardware description files (JSON) included with MasterPlus, all compatible
  * models should use an identical protocol.
@@ -54,6 +54,9 @@
  *   and does not send any requests to the PSU. Figuring out the protocol for
  *   setting custom fan curves will likely require sniffing USB traffic from
  *   CM's software (which refuses to run on my machine for some reason).
+ * - The XG650/750/850 PSUs may also use the same protocol as they are
+ *   supported by MasterPlus - However, those have different sets of channels/
+ *   sensors additional code may be needed
  */
 
 #define DRIVER_NAME "cm-psu"
@@ -453,8 +456,21 @@ static int cmpsu_raw_event(struct hid_device *hdev, struct hid_report *report, u
 	
 }
 
+/* Pulled from MasterPlus' DeviceList.cfg (may contain unreleased models) */
 static const struct hid_device_id cmpsu_idtable[] = {
-	{ HID_USB_DEVICE(0x2516, 0x0193) },
+	{ HID_USB_DEVICE(0x2516, 0x0030) }, /* MasterWatt 1200 */
+	{ HID_USB_DEVICE(0x2516, 0x018D) }, /* V550 GOLD i MULTI */
+	{ HID_USB_DEVICE(0x2516, 0x018F) }, /* V650 GOLD i MULTI */
+	{ HID_USB_DEVICE(0x2516, 0x0191) }, /* V750 GOLD i MULTI */
+	{ HID_USB_DEVICE(0x2516, 0x0193) }, /* V850 GOLD i MULTI */
+	{ HID_USB_DEVICE(0x2516, 0x0195) }, /* V550 GOLD i 12VO */
+	{ HID_USB_DEVICE(0x2516, 0x0197) }, /* V650 GOLD i 12VO */
+	{ HID_USB_DEVICE(0x2516, 0x0199) }, /* V750 GOLD i 12VO */
+	{ HID_USB_DEVICE(0x2516, 0x019B) }, /* V850 GOLD i 12VO */
+	{ HID_USB_DEVICE(0x2516, 0x019D) }, /* V650 PLATINUM i 12VO */
+	{ HID_USB_DEVICE(0x2516, 0x019F) }, /* V750 PLATINUM i 12VO */
+	{ HID_USB_DEVICE(0x2516, 0x01A1) }, /* V850 PLATINUM i 12VO */
+	{ HID_USB_DEVICE(0x2516, 0x01A5) }, /* FANLESS 1300 */
 	{ }
 };
 MODULE_DEVICE_TABLE(hid, cmpsu_idtable);
