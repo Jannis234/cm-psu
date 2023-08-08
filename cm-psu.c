@@ -1,5 +1,6 @@
 #include <linux/errno.h>
 #include <linux/hid.h>
+#include <linux/hwmon.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -9,6 +10,49 @@
 
 struct cmpsu_data {
 	struct hid_device *hdev;
+	struct device *hwmon_dev;
+};
+
+static const char *placeholder = "placeholder";
+
+static umode_t cmpsu_hwmon_is_visible(const void *data, enum hwmon_sensor_types type, u32 attr, int channel) {
+	
+	return 0444;
+	
+}
+
+static int cmpsu_hwmon_read(struct device *dev, enum hwmon_sensor_types type, u32 attr, int channel, long *val) {
+	
+	*val = 0;
+	return 0;
+	
+}
+
+static int cmpsu_hwmon_read_string(struct device *dev, enum hwmon_sensor_types type, u32 attr, int channel, const char **str) {
+	
+	*str = placeholder;
+	return 0;
+	
+}
+
+static const struct hwmon_ops cmpsu_hwmon_ops = {
+	.is_visible = cmpsu_hwmon_is_visible,
+	.read = cmpsu_hwmon_read,
+	.read_string = cmpsu_hwmon_read_string,
+};
+
+static const struct hwmon_channel_info* cmpsu_info[] = {
+	//HWMON_CHANNEL_INFO(chip,
+	//				HWMON_C_REGISTER_TZ),
+	HWMON_CHANNEL_INFO(temp,
+					HWMON_T_INPUT,
+					HWMON_T_INPUT),
+	NULL
+};
+
+static const struct hwmon_chip_info cmpsu_chip_info = {
+	.ops = &cmpsu_hwmon_ops,
+	.info = cmpsu_info,
 };
 
 static int cmpsu_probe(struct hid_device *hdev, const struct hid_device_id *id) {
@@ -40,6 +84,14 @@ static int cmpsu_probe(struct hid_device *hdev, const struct hid_device_id *id) 
 	hid_set_drvdata(hdev, priv);
 	hid_device_io_start(hdev);
 	
+	priv->hwmon_dev = hwmon_device_register_with_info(&hdev->dev, "corsairpsu", priv, &cmpsu_chip_info, NULL);
+	if (IS_ERR(priv->hwmon_dev)) {
+		ret = PTR_ERR(priv->hwmon_dev);
+		hid_hw_close(hdev);
+		hid_hw_stop(hdev);
+		return ret;
+	}
+	
 	return 0;
 	
 }
@@ -48,6 +100,7 @@ static void cmpsu_remove(struct hid_device *hdev) {
 	
 	struct cmpsu_data *priv = hid_get_drvdata(hdev);
 	
+	hwmon_device_unregister(priv->hwmon_dev);
 	hid_hw_close(hdev);
 	hid_hw_stop(hdev);
 	
