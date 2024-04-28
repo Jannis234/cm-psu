@@ -84,7 +84,8 @@ static const char* cmpsu_labels_voltage[] = {
 	"+5V",
 	"+3.3V",
 	"+12V2",
-	"+12V1", /* Reverse order because this oneis present on single-rail PSUs */
+	/* Reverse order because this one is present on single-rail PSUs */
+	"+12V1",
 };
 
 static const char* cmpsu_labels_current[] = {
@@ -99,6 +100,9 @@ static const char* cmpsu_labels_power[] = {
 	"P_in",
 	"P_out",
 };
+
+/*long cmpsu_parse_value(u8 *data, int *idx, int fraction_scale,
+			bool expect_second);*/
 
 static umode_t cmpsu_hwmon_is_visible(const void *data,
 			enum hwmon_sensor_types type, u32 attr, int channel)
@@ -309,121 +313,87 @@ static void cmpsu_remove(struct hid_device *hdev)
 	hid_hw_stop(hdev);
 }
 
-long cmpsu_parse_value(u8 *data, int *idx, int fraction_scale,
-			bool expect_second)
-{
-	long ret = 0;
-	int fraction_scale_current = 0;
-	
-	/* Make sure there is at least one digit */
-	if (data[*idx] < '0' || data[*idx] > '9')
-		return -1;
-	
-	while (data[*idx] >= '0' && data[*idx] <= '9') {
-		ret *= 10;
-		ret += data[*idx] - '0';
-		(*idx)++;
-	}
-	
-	if (data[*idx] == '.') {
-		(*idx)++;
-		
-		/* Check for at least one digit after a decimal point */
-		if (data[*idx] < '0' || data[*idx] > '9')
-			return -1;
-		
-		while (data[*idx] >= '0' && data[*idx] <= '9') {
-			/* Even if we are expecting an integer, we still run
-			 * this loop to move idx past this number. */
-			if (fraction_scale_current < fraction_scale) {
-				ret *= 10;
-				ret += data[*idx] - '0';
-				fraction_scale_current++;
-			}
-			(*idx)++;
-		}
-	}
-	
-	/* Add remaining zeros after the decimal point if needed */
-	while (fraction_scale_current < fraction_scale) {
-		ret *= 10;
-		fraction_scale_current++;
-	}
-	
-	/* Now check if the following character is valid */
-	if (data[*idx] == ']' || (data[*idx] == '/' && expect_second))
-		return ret;
-	return -1;
-}
-
 static int cmpsu_raw_event(struct hid_device *hdev, struct hid_report *report,
 			u8 *data, int size)
 {
 	struct cmpsu_data *priv = hid_get_drvdata(hdev);
 	char type;
-	int channel;
-	int idx;
-	long value, value2;
+	unsigned int channel;
+	unsigned int value1;
+	unsigned int value2;
 	
 	if (size != EVENT_LEN)
 		return 0;
 	
-	/* Make sure the string is terminated correctly */
-	if (data[size - 1] != 0 && data[size - 1] != '/')
+	/* Make sure the data is null-terminated */
+	if (data[size - 1] != 0)
 		return 0;
-	if (data[0] != '[')
+	/* Enforce a minimum length
+	 * (square brackets + data type + channel index + value) */
+	if (size < 5)
 		return 0;
 	
-	type = data[1];
-	if (data[2] < '1' || data[2] > '9')
+	/* Pick the correct format string depending on the packet type */
+	switch (data[1]) {
+		/* Voltage, current, temperature: Single value with one decimal */
+		case 'V':
+		case 'I':
+		case 'T':
+			if (sscanf(data, "[%c%1u%03u.%1u]",
+						&type, &channel, &value1, &value2) != 4)
+				return 0;
+			break;
+		/* Fan RPM: Single value, no decimal */
+		case 'R':
+			if (sscanf(data, "[%c%1u%04u]",
+						&type, &channel, &value1) != 3)
+				return 0;
+			break;
+		/* Power: Two values, no decimal */
+		case 'P':
+			/* Ignore packet P1 */
+			if (data[2] != '2')
+				return 0;
+			if (sscanf(data, "[%c%1u%04u/%04u]",
+						&type, &channel, &value1, &value2) != 4)
+				return 0;
+			break;
+		default:
+			return 0;
+	}
+	
+	if (channel < 0)
 		return 0;
-	channel = data[2] - '1';
-	idx = 3;
+	/* Index from the device starts at 1 */
+	channel -= 1;
+	
 	switch (type) {
 		case 'V':
 			if (channel >= COUNT_VOLTAGE)
 				return 0;
-			value = cmpsu_parse_value(data, &idx, 3, false);
-			if (value >= 0)
-				priv->values_voltage[channel] = value;
+			priv->values_voltage[channel] = (value1 * 1000) + (value2 * 100);
 			break;
 		case 'I':
 			if (channel >= COUNT_CURRENT)
 				return 0;
-			value = cmpsu_parse_value(data, &idx, 3, false);
-			if (value >= 0)
-				priv->values_current[channel] = value;
-			break;
-		case 'P':
-			/* Special case for channel P2 */
-			if (channel != 1)
-				return 0;
-			value = cmpsu_parse_value(data, &idx, 6, true);
-			if (value == -1)
-				return 0;
-			idx++; /* Skip past the '/' */
-			value2 = cmpsu_parse_value(data, &idx, 6, false);
-			if (value2 >= 0) {
-				priv->values_power[0] = value;
-				priv->values_power[1] = value2;
-			}
+			priv->values_current[channel] = (value1 * 1000) + (value2 * 100);
 			break;
 		case 'T':
 			if (channel >= COUNT_TEMP)
 				return 0;
-			value = cmpsu_parse_value(data, &idx, 3, false);
-			if (value >= 0)
-				priv->values_temp[channel] = value;
+			priv->values_temp[channel] = (value1 * 1000) + (value2 * 100);
 			break;
 		case 'R':
 			if (channel >= COUNT_FAN)
 				return 0;
-			value = cmpsu_parse_value(data, &idx, 0, false);
-			if (value >= 0)
-				priv->values_fan[channel] = value;
+			priv->values_fan[channel] = value1;
 			break;
-		default:
-			return 0; /* Unknown type */
+		case 'P':
+			if (channel != 1)
+				return 0;
+			priv->values_power[0] = value1 * 1000000;
+			priv->values_power[1] = value2 * 1000000;
+			break;
 	}
 	
 	return 0;
