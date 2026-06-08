@@ -2,7 +2,10 @@
 This driver adds hwmon support for certain Cooler Master power supplies with a USB interface, allowing voltage, current, temperature, etc. to be displayed in linux.
 
 ## Supported hardware
-The driver was developed and tested with a V850 Gold i multi PSU, but any similar supply that is supported by CM's MasterPlus software should work, with the exception being the XG650/750/850 line.
+The driver currently supports the following hardware:
+* Most PSUs supported by Cooler Master's MasterPlus software, except the XG650/750/850 line (tested with a V850 Gold i multi)
+* Cooler Master X SILENT Edge Platinum 1100
+If you have a unit that is currently not supported and you want to help adding it, please feel free to open an issue or pull request on GitHub!
 
 ## Installation and usage
 Assuming that you have the required packages to build kernel modules installed, installing this driver should be as simple as
@@ -38,11 +41,9 @@ I_+12V1:       6.40 A
 ```
 
 ## Limitations
-* **This driver is new and experimental!** Please open an issue if you encounter any issues (especially with PSU models I haven't tested). I plan to submit this upstream eventually once I can consider it stable enough.
-* The XG650/750/850 line is not supported as those units use a different protocol (see issue [#1](https://github.com/Jannis234/cm-psu/issues/1))
-* The two temperature readings are unlabeled because I don't know what sensor they belong to (CM's software only shows one of them)
-* There is one unidentified value (called `P1` in the PSU's data) that is currently not being reported (also doesn't show up in MasterPlus)
-* Manual fan control is not supported. In its current state, the driver is entirely passive and simply parses data that is constantly being sent by the PSU which means that I haven't made any attempts to reverse engineer the protocol used for setting fan curves.
+* MasterPlus: Although supported, the XG650/750/850 line uses a different protocol than other supported units that has not yet been reverse engineered
+* MasterPlus: Fan control is not implemented
+* MasterPlus: Power supplies report an unidentified value (labelled `P1`) that is currently ignored by the driver
 
 ## Credits
 This driver is heavily based on the `corsair-psu` kernel driver by Wilken Gottwalt.
