@@ -9,8 +9,11 @@
  * X SILENT Edge Platinum support (PID 0x020C) added 2026.
  * That model speaks a DIFFERENT protocol than the MasterPlus devices:
  *  - Binary (not ASCII), little-endian values
- *  - Report 3 (23 bytes incl. report-id) = full telemetry, streamed by the
- *    device on its own (no request needed)
+ *  - The device stays SILENT after a power-cycle until it receives an arming
+ *    command: output report id 0x02 with a single data byte 0x04. After that
+ *    it streams telemetry on its own via the interrupt-in endpoint.
+ *    (Captured from HWiNFO/MasterCTRL traffic.)
+ *  - Report 3 (23 bytes incl. report-id) = full telemetry
  *  - Report 4 (2 bytes incl. report-id)  = hotspot temperature in degC
  * Layout of report 3 payload (data[1..22], data[0] = report id 0x03):
  *   [0,1] u16 Vin/10   [2] u8 Iin/10   [3,4] u16 Pin   [5,6] u16 Pout
@@ -26,6 +29,7 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/slab.h>
 #include <linux/types.h>
 
 /*
@@ -62,6 +66,11 @@ enum cmpsu_proto {
 #define XS_REPORT_TEMP 0x04
 #define XS_LEN_DATA    23
 #define XS_LEN_TEMP    2
+
+/* Arming command: device only starts streaming after we send this.
+ * Output report id 0x02, single data byte 0x04 (captured from HWiNFO). */
+#define XS_ARM_REPORT_ID 0x02
+#define XS_ARM_DATA_BYTE 0x04
 
 struct cmpsu_data {
 	struct hid_device *hdev;
@@ -401,6 +410,31 @@ static inline u16 cmpsu_xs_u16(const u8 *d, int i)
 	return d[i] | (d[i + 1] << 8);
 }
 
+/* Send the arming command so the PSU starts streaming telemetry reports.
+ * Without this, the device stays silent after a real power-cycle.
+ * hid_hw_output_report() routes to the interrupt-out endpoint if present
+ * (which this device has), otherwise to the control endpoint. */
+static int cmpsu_xs_arm(struct hid_device *hdev)
+{
+	u8 *buf;
+	int ret;
+
+	buf = kmalloc(2, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	buf[0] = XS_ARM_REPORT_ID;	/* report id 0x02 */
+	buf[1] = XS_ARM_DATA_BYTE;	/* data    0x04   */
+
+	ret = hid_hw_output_report(hdev, buf, 2);
+
+	kfree(buf);
+	if (ret < 0)
+		hid_warn(hdev, "cm-psu: X SILENT arming command failed: %d\n",
+			 ret);
+	return ret;
+}
+
 static void cmpsu_xs_parse(struct cmpsu_data *priv, u8 *data, int size)
 {
 	/* data[0] = report id; payload starts at data[1] */
@@ -468,6 +502,9 @@ static int cmpsu_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		for (i = 0; i < XS_COUNT_TEMP; i++)
 			priv->xs_temp[i] = -1;
 		chip = &cmpsu_xs_chip_info;
+
+		/* Kick the device into streaming mode (see cmpsu_xs_arm) */
+		cmpsu_xs_arm(hdev);
 	} else {
 		for (i = 0; i < COUNT_VOLTAGE; i++)
 			priv->values_voltage[i] = -1;
