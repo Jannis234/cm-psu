@@ -295,6 +295,9 @@ static const struct hwmon_channel_info* cmpsu_info[] = {
 					HWMON_C_INPUT | HWMON_C_LABEL),
 	HWMON_CHANNEL_INFO(power,
 					HWMON_P_INPUT | HWMON_P_LABEL,
+					HWMON_P_INPUT | HWMON_P_LABEL,
+					HWMON_P_INPUT | HWMON_P_LABEL,
+					HWMON_P_INPUT | HWMON_P_LABEL,
 					HWMON_P_INPUT | HWMON_P_LABEL),
 	NULL
 };
