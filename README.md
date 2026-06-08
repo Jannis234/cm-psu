@@ -5,6 +5,7 @@ This driver adds hwmon support for certain Cooler Master power supplies with a U
 The driver currently supports the following hardware:
 * Most PSUs supported by Cooler Master's MasterPlus software, except the XG650/750/850 line (tested with a V850 Gold i multi)
 * Cooler Master X SILENT Edge Platinum 1100
+  * Other units supported by MasterCtrl may work. If you have one, please open an issue with the device ID reported by `lsusb`
 If you have a unit that is currently not supported and you want to help adding it, please feel free to open an issue or pull request on GitHub!
 
 ## Installation and usage
