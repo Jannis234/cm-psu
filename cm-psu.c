@@ -14,12 +14,15 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/types.h>
+#include <linux/unaligned.h>
 
 /*
  * Protocol information:
- * This driver currently supports the ASCII protocol implemented by Cooler
- * Master's MasterPlus software and supported PSUs
+ * This driver currently supports two protocols:
+ * - ASCII (Cooler Master MasterPlus)
+ * - Binary (Cooler Master MasterCtrl)
  * 
+ * --- ASCII protocol ---
  * The PSU continuously sends HID events when powered on, containing human
  * readable ASCII strings. The format is:
  * [${type}${channel}${value}]
@@ -37,6 +40,16 @@
  * - Fan control is not implemented
  * - Cooler Master XG650/750/850 PSUs are not supported. These models are
  *   supported by MasterPlus but seem to use a different protocol
+ * 
+ * --- Binary protocol ---
+ * Similar to the ASCII protocol, after sending a command to initialize the
+ * PSU, it will start sending HID events containing power or temperature data.
+ * See cmpsu_parse_binary() below for the extact offset and size of each field
+ * 
+ * Missing features:
+ * - The PSU firmware version (HID report 1) is currently not reported
+ * - The meaning of HID report 5 is currently unknown, it is ignored by this
+ *   driver
  */
 
 #define DRIVER_NAME "cm-psu"
@@ -48,14 +61,29 @@
 #define ASCII_COUNT_TEMP    2
 #define ASCII_COUNT_FAN     1
 
+/* Channel count for the binary protocol */
+#define BINARY_COUNT_VOLTAGE 4
+#define BINARY_COUNT_CURRENT 4
+#define BINARY_COUNT_POWER   5
+#define BINARY_COUNT_TEMP    1
+#define BINARY_COUNT_FAN     0
+
 /* Maximum channel count for all protocols */
 #define COUNT_VOLTAGE 5
 #define COUNT_CURRENT 5
-#define COUNT_POWER   2
+#define COUNT_POWER   5
 #define COUNT_TEMP    2
 #define COUNT_FAN     1
 
 #define ASCII_EVENT_LEN 16
+
+#define BINARY_INIT_CMD_LEN   2
+#define BINARY_INIT_REPORT_ID 0x02
+#define BINARY_INIT_DATA      0x04
+#define BINARY_POWER_LEN      23
+#define BINARY_TEMP_LEN       2
+#define BINARY_REPORT_POWER   0x03
+#define BINARY_REPORT_TEMP    0x04
 
 static const char* cmpsu_labels_ascii_voltage[] = {
 	"V_AC",
@@ -77,8 +105,29 @@ static const char* cmpsu_labels_ascii_power[] = {
 	"P_out",
 };
 
+static const char* cmpsu_labels_binary_voltage[] = {
+	"V_AC",
+	"+12V",
+	"+3.3V",
+	"+5V",
+};
+static const char* cmpsu_labels_binary_current[] = {
+	"I_AC",
+	"I_+12V",
+	"I_+3.3V",
+	"I_+5V",
+};
+static const char* cmpsu_labels_binary_power[] = {
+	"P_in",
+	"P_out",
+	"P_+12V",
+	"P_+3.3V",
+	"P_+5V",
+};
+
 enum cmpsu_protocol {
 	CMPSU_PROTO_ASCII,
+	CMPSU_PROTO_BINARY,
 };
 
 struct cmpsu_data {
@@ -255,6 +304,19 @@ static const struct hwmon_chip_info cmpsu_chip_info = {
 	.info = cmpsu_info,
 };
 
+static int cmpsu_binary_init(struct hid_device *hdev)
+{
+	u8 buf[BINARY_INIT_CMD_LEN] = {
+		BINARY_INIT_REPORT_ID,
+		BINARY_INIT_DATA
+	};
+	int ret = hid_hw_output_report(hdev, buf, BINARY_INIT_CMD_LEN);
+	
+	if (ret < 0)
+		hid_warn(hdev, "Initialize command failed (%d)\n", ret);
+	return ret;
+}
+
 static int cmpsu_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
 	struct cmpsu_data *priv;
@@ -293,7 +355,8 @@ static int cmpsu_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		priv->values_fan[i] = -1;
 	
 	priv->protocol = id->driver_data;
-	if (id->driver_data == CMPSU_PROTO_ASCII) {
+	switch (id->driver_data) {
+	case CMPSU_PROTO_ASCII:
 		priv->count_voltage = ASCII_COUNT_VOLTAGE;
 		priv->count_current = ASCII_COUNT_CURRENT;
 		priv->count_power = ASCII_COUNT_POWER;
@@ -302,6 +365,26 @@ static int cmpsu_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		priv->labels_voltage = cmpsu_labels_ascii_voltage;
 		priv->labels_current = cmpsu_labels_ascii_current;
 		priv->labels_power = cmpsu_labels_ascii_power;
+		break;
+	case CMPSU_PROTO_BINARY:
+		priv->count_voltage = BINARY_COUNT_VOLTAGE;
+		priv->count_current = BINARY_COUNT_CURRENT;
+		priv->count_power = BINARY_COUNT_POWER;
+		priv->count_temp = BINARY_COUNT_TEMP;
+		priv->count_fan = BINARY_COUNT_FAN;
+		priv->labels_voltage = cmpsu_labels_binary_voltage;
+		priv->labels_current = cmpsu_labels_binary_current;
+		priv->labels_power = cmpsu_labels_binary_power;
+		break;
+	}
+	
+	if (id->driver_data == CMPSU_PROTO_BINARY) {
+		ret = cmpsu_binary_init(hdev);
+		if (ret < 0) {
+			hid_hw_close(hdev);
+			hid_hw_stop(hdev);
+			return ret;
+		}
 	}
 	
 	priv->hwmon_dev = hwmon_device_register_with_info(&hdev->dev, "cmpsu",
@@ -325,7 +408,7 @@ static void cmpsu_remove(struct hid_device *hdev)
 	hid_hw_stop(hdev);
 }
 
-static int cmpsu_parse_ascii(struct cmpsu_data *priv,
+static void cmpsu_parse_ascii(struct cmpsu_data *priv,
 			struct hid_report *report, u8 *data, int size)
 {
 	char type;
@@ -334,15 +417,15 @@ static int cmpsu_parse_ascii(struct cmpsu_data *priv,
 	unsigned int value2;
 	
 	if (size != ASCII_EVENT_LEN)
-		return 0;
+		return;
 	
 	/* Make sure the data is null-terminated */
 	if (data[size - 1] != 0)
-		return 0;
+		return;
 	/* Enforce a minimum length
 	 * (square brackets + data type + channel index + value) */
 	if (size < 5)
-		return 0;
+		return;
 	
 	/* Pick the correct format string depending on the packet type */
 	switch (data[1]) {
@@ -352,62 +435,82 @@ static int cmpsu_parse_ascii(struct cmpsu_data *priv,
 	case 'T':
 		if (sscanf(data, "[%c%1u%03u.%1u]",
 					&type, &channel, &value1, &value2) != 4)
-			return 0;
+			return;
 		break;
 	/* Fan RPM: Single value, no decimal */
 	case 'R':
 		if (sscanf(data, "[%c%1u%04u]",
 					&type, &channel, &value1) != 3)
-			return 0;
+			return;
 		break;
 	/* Power: Two values, no decimal */
 	case 'P':
 		/* Ignore packet P1 */
 		if (data[2] != '2')
-			return 0;
+			return;
 		if (sscanf(data, "[%c%1u%04u/%04u]",
 					&type, &channel, &value1, &value2) != 4)
-			return 0;
+			return;
 		break;
 	default:
-		return 0;
+		return;
 	}
 	
 	if (channel < 0)
-		return 0;
+		return;
 	/* Index from the device starts at 1 */
 	channel -= 1;
 	
 	switch (type) {
 	case 'V':
 		if (channel >= COUNT_VOLTAGE)
-			return 0;
+			return;
 		priv->values_voltage[channel] = (value1 * 1000) + (value2 * 100);
 		break;
 	case 'I':
 		if (channel >= COUNT_CURRENT)
-			return 0;
+			return;
 		priv->values_current[channel] = (value1 * 1000) + (value2 * 100);
 		break;
 	case 'T':
 		if (channel >= COUNT_TEMP)
-			return 0;
+			return;
 		priv->values_temp[channel] = (value1 * 1000) + (value2 * 100);
 		break;
 	case 'R':
 		if (channel >= COUNT_FAN)
-			return 0;
+			return;
 		priv->values_fan[channel] = value1;
 		break;
 	case 'P':
 		if (channel != 1)
-			return 0;
+			return;
 		priv->values_power[0] = value1 * 1000000;
 		priv->values_power[1] = value2 * 1000000;
 		break;
 	}
-	
-	return 0;
+}
+
+static void cmpsu_parse_binary(struct cmpsu_data *priv,
+			struct hid_report *report, u8 *data, int size)
+{
+	if (size == BINARY_POWER_LEN && data[0] == BINARY_REPORT_POWER) {
+		priv->values_voltage[0] = (long) get_unaligned_le16(data + 1) * 100;
+		priv->values_voltage[1] = (long) data[8] * 100;
+		priv->values_voltage[2] = (long) data[13] * 100;
+		priv->values_voltage[3] = (long) data[18] * 100;
+		priv->values_current[0] = (long) data[3] * 100;
+		priv->values_current[1] = (long) get_unaligned_le16(data + 9) * 100;
+		priv->values_current[2] = (long) get_unaligned_le16(data + 14) * 100;
+		priv->values_current[3] = (long) get_unaligned_le16(data + 19) * 100;
+		priv->values_power[0] = (long) get_unaligned_le16(data + 4) * 1000000;
+		priv->values_power[1] = (long) get_unaligned_le16(data + 6) * 1000000;
+		priv->values_power[2] = (long) get_unaligned_le16(data + 11) * 1000000;
+		priv->values_power[3] = (long) get_unaligned_le16(data + 16) * 1000000;
+		priv->values_power[4] = (long) get_unaligned_le16(data + 21) * 1000000;
+	} else if (size == BINARY_TEMP_LEN && data[0] == BINARY_REPORT_TEMP) {
+		priv->values_temp[0] = (long) data[1] * 1000;
+	}
 }
 
 static int cmpsu_raw_event(struct hid_device *hdev, struct hid_report *report,
@@ -417,7 +520,11 @@ static int cmpsu_raw_event(struct hid_device *hdev, struct hid_report *report,
 	
 	switch (priv->protocol) {
 	case CMPSU_PROTO_ASCII:
-		return cmpsu_parse_ascii(priv, report, data, size);
+		cmpsu_parse_ascii(priv, report, data, size);
+		break;
+	case CMPSU_PROTO_BINARY:
+		cmpsu_parse_binary(priv, report, data, size);
+		break;
 	}
 	return 0;
 }
@@ -450,15 +557,19 @@ static const struct hid_device_id cmpsu_idtable[] = {
 	{ HID_USB_DEVICE(0x2516, 0x01A1), .driver_data = CMPSU_PROTO_ASCII },
 	/* FANLESS 1300 */
 	{ HID_USB_DEVICE(0x2516, 0x01A5), .driver_data = CMPSU_PROTO_ASCII },
+	
+	/* X SILENT Edge Platinum 1100 */
+	{ HID_USB_DEVICE(0x2516, 0x020C), .driver_data = CMPSU_PROTO_BINARY },
+	
 	{ }
 };
 MODULE_DEVICE_TABLE(hid, cmpsu_idtable);
 
 static struct hid_driver cmpsu_driver = {
-	.name = DRIVER_NAME,
-	.id_table = cmpsu_idtable,
-	.probe = cmpsu_probe,
-	.remove = cmpsu_remove,
+	.name      = DRIVER_NAME,
+	.id_table  = cmpsu_idtable,
+	.probe     = cmpsu_probe,
+	.remove    = cmpsu_remove,
 	.raw_event = cmpsu_raw_event,
 };
 module_hid_driver(cmpsu_driver);
