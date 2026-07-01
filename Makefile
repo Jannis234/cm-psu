@@ -1,12 +1,15 @@
+KERNELDIR ?= /lib/modules/$(shell uname -r)/build
+PWD ?= $(shell pwd)
+
 obj-m := cm-psu.o
 
 all:
-	make -C /lib/modules/$(shell uname -r)/build M=$(shell pwd) modules
+	make -C $(KERNELDIR) M=$(PWD) modules
 
 install:
-	make -C /lib/modules/$(shell uname -r)/build M=$(shell pwd) modules_install
+	make -C $(KERNELDIR) M=$(PWD) modules_install
 
 clean:
-	make -C /lib/modules/$(shell uname -r)/build M=$(shell pwd) clean
+	make -C $(KERNELDIR) M=$(PWD) clean
 
 .PHONY: all
