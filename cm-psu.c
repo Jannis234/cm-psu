@@ -561,6 +561,8 @@ static const struct hid_device_id cmpsu_idtable[] = {
 	/* FANLESS 1300 */
 	{ HID_USB_DEVICE(0x2516, 0x01A5), .driver_data = CMPSU_PROTO_ASCII },
 	
+	/* X SILENT Edge Platinum 850 */
+	{ HID_USB_DEVICE(0x2516, 0x01A3), .driver_data = CMPSU_PROTO_BINARY },
 	/* X SILENT Edge Platinum 1100 */
 	{ HID_USB_DEVICE(0x2516, 0x020C), .driver_data = CMPSU_PROTO_BINARY },
 	
